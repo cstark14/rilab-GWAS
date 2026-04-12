@@ -1,0 +1,213 @@
+---
+title: "Week 7 - GWAS"
+author: "Cristian Stark"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(error = TRUE)
+```
+
+**Total Number of Points: 20**
+
+**Due Date: 2023-02-28 \@ 11:59PM**
+
+In this week's homework, you will run a Genome-Wide Association Analysis with the *sommer* and *rrBLUP* packages. In my opinion, *sommer* is more flexible while *rrBLUP* is more plug-and-play. There are multiple packages that can be used for GWAS, some more flexible than others. We will be showcasing these two. We will be using two datasets: one with fruit firmness data and one with disease resistance data you have previously encountered.
+
+-   Base R functions:
+    -   data[c(3,4),c(1,2)] : prints or extracts rows 3 and 4 and columns 1 and 2 of dataframe or matrix 'data'. Row values will come before the comma and column values will come after the comma. You can also call rows and columns by their names (e.g. data[,c("Gene1", "Gene2")]).
+    -   data[-c(3,4),-c(1,2)] : removes rows 3 and 4 and columns 1 and 2 of dataframe or matrix 'data'. Row values will come before the comma and column values will come after the comma. You can also call rows and columns by their names (e.g. data[,-c("Gene1", "Gene2")]).
+    -   data \<- t(data) : transposes (rows-to-columns and columns-to-rows) a dataframe or matrix.
+-   *sommer* package:
+    -   *manhattan()* : requires 'Chrom', 'Position', and 'p.val' columns to generate a manhattan plot.
+
+```{r}
+#to install library GWASTools:
+
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#   install.packages("BiocManager")
+# 
+# 
+```
+
+```{r,echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+library(sommer)
+library(ggplot2)
+library(GWASTools) #for QQ-plot
+library(tidyverse)
+library(dplyr)
+library(rrBLUP)
+```
+
+# Question 1 - 9 pts
+
+**A) The genotypes for the first dataset are provided in the "lab6.Rdata" file. Load it, then create a table containing only the marker information (which are in columns 1 to 3 for the 'data' object). Create another marker matrix (M) by: 1) removing the 3 first columns, (2) transposing it, and (3) renaming the columns with the "probe_id" information from the marker information table.** -- 3 pts
+
+```{r}
+load("lab6.Rdata")
+onlyMarkerInfo <- data %>% select(1:3)
+genos <- data %>% select(-1,-2,-3) %>% t()
+colnames(genos) <- onlyMarkerInfo$probe_id
+genos[1:5,1:5]
+```
+
+**B) Now that the genotype file is in the right orientation (rows = accessions and columns = markers), we can impute the missing genotypes and calculate the genomic relationship matrix (G) using the *A.mat()* function in sommer.** -- 3 pts
+
+```{r}
+genosAMat <- sommer::A.mat(genos,return.imputed = TRUE)
+gMatrix <- genosAMat$A
+imputedGenos <- genosAMat$X
+imputedGenos[1:5,1:5]
+```
+
+**C) To look for signs of population structure, we will do a principal components analysis to the marker matrix. Perform the analysis, plot PCs 1 and PCs 2. Do you think there is population structure based on the PC1 x PC2 plot?** -- 3 pts
+
+```{r}
+imputedPCA <- prcomp(imputedGenos)
+plotPCA <- ggplot(imputedPCA$x,aes(x=PC1,y=PC2)) + geom_point()
+plotPCA
+
+#Scree Plot Provided Code (Uncomment to run)
+pca <- imputedPCA #Replace X with your PCA object generated from prcomp
+vars <- apply(pca$x, 2, var)  
+props <- vars / sum(vars)
+#cumsum(props) #Uncomment if you want to see a table of values
+plot(props)
+print("There does seem to be population structure based on just 2 PCs. The scree plot also seems to show that the first couple PCs might be enough to correct for population structure")
+```
+
+# Question 2 - 6 pts
+
+**A) Load the phenotype data from `phenotypes.txt`. This file contains 2 columns: "Taxa" is the Accession ID, and "Penetrometer" is a measure of fruit firmness. Make sure that the "Taxa" column is not classified as a number before you start. Then, create a histogram of the phenotypic data.** -- 2 pts
+
+```{r}
+phenoTxt <- read.table("/Users/cristianstark/OneDrive/Documents/GradSchool/PLS225/Lab6-GWAS/phenotypes.txt",header=T) %>% 
+  mutate(Taxa=as.character(Taxa))
+hist(phenoTxt$Penetrometer)
+```
+
+Below is code for performing an univariate GWAS and plotting the results using the *manhattan()* function. In the model, the response variable is "Penetrometer" and the fixed effect is the the overall mean (Penetrometer \~ 1). The random effects are "Taxa" and the G matrix. The marker matrix is the imputed genotype matrix you created using *A.mat()*. No PCs have been incorporated. A horizontal threshold line indicating the Bonferroni significance threshold (calculated as -log10(0.05/*n_snps*)) has been added to the Manhattan plot using the *abline()* function.
+
+```{r,error=FALSE, message=FALSE}
+#Sommer: GWAS
+phenoDataForGenos <- phenoTxt %>% filter(Taxa %in% rownames(gMatrix))
+
+mix2 = sommer::GWAS(Penetrometer~1,
+            random = ~vs(Taxa, Gu=gMatrix),
+            rcov = ~units,
+            data = phenoDataForGenos,
+            n.PC = 0,
+            min.MAF=0,
+            M = imputedGenos,
+            gTerm="u:Taxa")
+#Manhattan Plot Preparation (adding chromosome and position information)
+ms = as.data.frame(mix2$scores)
+ms$probe_id = rownames(ms)
+MP2 = merge(onlyMarkerInfo,ms,by="probe_id",all.x = TRUE);
+colnames(MP2)[2:3]=c("Chrom","Position")
+
+#Actual Manhattan Plot
+manhattan(MP2, pch=20, cex=.5, show.fdr = F, PVCN = "Penetrometer",ylim=c(0,8));abline(h=-log10(0.05/38414))
+```
+
+The code above performs what you sometimes see referred to as a 'K GWAS' in the literature: that is, a GWAS corrected by a relationship matrix (in this case the G matrix). There is also a 'Q GWAS', which is only corrected by the PCs, and a 'Q + K GWAS', which corrects using both PCs and a relationship matrix (Yu et al. (2006): <https://www.nature.com/articles/ng1702>).
+
+**B) Using the reference code above, run the same model but now add the 3 first PCs as covariates in your model. This will run a Q + K GWAS. Plot the results as a Manhanttan plot and compare and contrast with Manhattan plot generated from the K GWAS above.** -- 2 pts
+
+```{r,warning=F,echo=F,error=FALSE, message=FALSE}
+mixQK = sommer::GWAS(Penetrometer~1,
+            random = ~vs(Taxa, Gu=gMatrix),
+            rcov = ~units,
+            data = phenoDataForGenos,
+            n.PC = 3,
+            min.MAF=0,
+            M = imputedGenos,
+            gTerm="u:Taxa")
+#Manhattan Plot Preparation (adding chromosome and position information)
+msqk = as.data.frame(mixQK$scores)
+msqk$probe_id = rownames(msqk)
+MPQK = merge(onlyMarkerInfo,msqk,by="probe_id",all.x = TRUE);
+colnames(MPQK)[2:3]=c("Chrom","Position")
+
+#Actual Manhattan Plot
+manhattan(MPQK, pch=20, cex=.5, show.fdr = F, PVCN = "Penetrometer",ylim=c(0,8));abline(h=-log10(0.05/38414))
+
+print("After correcting for 3 PCs, we lose all significant signal. This means that for our population, it is likely that the signal was caused by population structure and not trait linkage.")
+```
+
+A standard quality-control for GWAS analyses is to compare the p-values to a uniform distribution with a quantile-quantile plot or QQ Plot. The genomic control coefficient $\lambda$ is a measure of the departure of the median p-value from its expected position. We expect to see $\lambda$ close to 1. A $\lambda$ much greater than 1 suggests that the p-values are significantly inflated and are an indication of potential false-positives. A $\lambda$ much less than 1 suggests that the p-values are significanctly deflated; true postive results may have been lost due to the deflation.
+
+**C) Use the *qqPlot()* function to plot the QQ plots for the two GWAS analyses above (hint: use the PVAl function to change the scores resulting from the GWAS to p-values). Use the provided function (lambda) to calculate** $\lambda$ asssociated with the two GWAS models. Based on the QQ plots and $\lambda$, which of the 2 models would you use? Explain briefly. -- 2 pts
+
+```{r}
+#given marker score, return p-value
+PVAL <- function(score){
+  pval <- sort(10^(-score))
+  return(pval)
+}
+
+#calculate lambda
+lambda <- function(pval){
+  chisq <- qchisq(1-pval,1)
+  lambda <- median(chisq)/qchisq(0.5,1)
+  return(lambda)
+}
+
+mix2pvals <- ms %>% mutate(PenetrometerPVals = PVAL(Penetrometer))
+msqkPvals <- msqk %>% mutate(PenetrometerPVals = PVAL(Penetrometer))
+
+mix2pvals$PenetrometerLam <- lambda(mix2pvals$PenetrometerPVals)
+msqkPvals$PenetrometerLam <- lambda(msqkPvals$PenetrometerPVals)
+
+qqPlot(mix2pvals$PenetrometerPVals)
+qqPlot(msqkPvals$PenetrometerPVals)
+
+print("Choosing between these is a little tricky. The non PC model has better lambda values (0.98 vs 0.78), but the QQ plot looks better for the PC model than the non-PC model. I think I would choose the PC model though because it seems like better science to account for known variables.")
+```
+
+# Question 3 - 5 pts
+
+*rrBLUP* is another population package option for both GWAS and genomic prediction. While somewhat less flexible than *sommer*, it still performs well if you want to do the basic types of GWAS models (Q, Q+K, K).
+
+**A) Load the genotype, phenotype, and G matrix .RDS files for dataset 2 using the *readRDS()* function. These files contain disease resistance data for the material you were estimating marginal means for in Labs 1 and 2. Not all accessions were genotyped, so there are fewer than the 565 from previous versions of this data. Use the *GWAS()* function from the rrBLUP package to run a K GWAS directly on these objects, generate a Manhattan plot (you will need to rename columns in your rrBLUP GWAS output if you are using the *manhattan()* function), and report** $\lambda$. Comment on your results. -- 2 pts
+
+```{r}
+library(rrBLUP)
+
+PVAL <- function(score){
+  pval <- sort(10^(-score))
+  return(pval)
+}
+
+#calculate lambda
+lambda <- function(pval){
+  chisq <- qchisq(1-pval,1)
+  lambda <- median(chisq)/qchisq(0.5,1)
+  return(lambda)
+}
+
+G_Matrix_Dataset2 <- readRDS("~/OneDrive/Documents/GradSchool/PLS225/Lab6-GWAS/G_Matrix_Dataset2.Rds")
+Genotypes_Dataset2 <- readRDS("~/OneDrive/Documents/GradSchool/PLS225/Lab6-GWAS/Genotypes_Dataset2.Rds")
+Phenotypes_Dataset2 <- readRDS("~/OneDrive/Documents/GradSchool/PLS225/Lab6-GWAS/Phenotypes_Dataset2.Rds")
+
+rrGWAS <- rrBLUP::GWAS(pheno=Phenotypes_Dataset2,geno=Genotypes_Dataset2,K=G_Matrix_Dataset2) %>% rename("Chrom"=CHR,"Position"=POS)
+numSnps <- 35144
+```
+
+```{r}
+manhattan(rrGWAS, pch=20, cex=.5, show.fdr = F, PVCN = "Fusarium2016",ylim=c(0,8));abline(h=-log10(0.05/numSnps))
+```
+
+```{r}
+rrGWAS$pval <- PVAL(rrGWAS$Fusarium2016)
+rrGWAS$lambda <- lambda(rrGWAS$pval)
+
+paste0("Lambda is ",max(rrGWAS$lambda),". This seems really low, so p-values are probably deflated, but I'm still getting good signal for one locus, which means it's probably super important.")
+```
+
+**B) A flaw in GWAS is that it relies on the quality of the chromosome and position you provide for your markers. If there is only *one* true signal in this dataset, what do you think may be the cause for the stray signals on other chromosomes in the GWAS results / Manhattan plot? Can you think of a way to address this if reporting your results by consulting outside data, or is there a way you can redo the analysis to correct for these stray signals? This is a 'what do you think' question; as long as you attempt it, you will get points.** -- 3 pts
+
+```{r}
+print("Could be a multitude of things. Simplest biological, non-error reason could be other areas being LD, although that is unlikely when on other chromosomes unless there's maybe a 3D reason for these areas to be linked. Error-wise, it could be that the SNPs could have incorrect positions or we are getting signal from a somewhat repetitive sequence locus which has similar sequence in other parts of the genome. We could consult genome publications for ideas about quality. If we wanted to redo the analysis, maybe there are other corrections we can do beside Bonferroni? Maybe FDR correction?")
+```

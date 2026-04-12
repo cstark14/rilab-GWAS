@@ -1,0 +1,144 @@
+---
+title: "Week 7 - GWAS"
+author: "Cristian Stark"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(error = TRUE)
+
+library(readr)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(genio)
+library(qqman)
+library(lme4)
+library(emmeans)
+```
+
+# Convert to geno matrix
+```{bash, eval=FALSE,warning=FALSE}
+#### first had to rename all the LDpruned050 because they were not extracted for LD prune in SNPs. Then ran
+plink --bfile nctb_cdb_missing0.02_maf0.05_hwe0.0001 --extract nctb_cdb_missing0.02_maf0.05_hwe0.0001.prune.in --make-bed --out nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050
+
+plink --bfile nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050 --recode12 --out nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_recode
+plink --bfile nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050 --recode compound-genotypes tabx --out nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_compound
+### add in snps-only?
+
+### grm
+gcta64 --bfile nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050 --autosome --make-grm --out nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_grm
+
+### sparse grm for GWAS
+gcta64 --grm nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_grm --make-bK-sparse 0.05 --out nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_sp_grm
+
+gcta64 --grm nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_grm --pca 10 --out nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_grm_pca
+
+### make pheno file for gcta gwas
+cut -d " " -f 1,2,6 nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050.fam > height.phen
+
+###
+#### gcta gwas with PCs example
+# To run a fastGWA analysis based on the sparse GRM generated above
+gcta64 --bfile nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050 --grm-sparse nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_sp_grm --fastGWA-mlm --pheno height.phen --thread-num 10 --out geno_assoc_noPCs
+
+gcta64 --bfile nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050 --grm-sparse nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_sp_grm --fastGWA-mlm --pheno height.phen --qcovar nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_grm_pca.eigenvec --thread-num 10 --out geno_assoc
+
+
+#### To run other covariates, I can only use NCTB 
+cat nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050.fam | grep "NC" | cut -d " " -f 1,2 > nctbIndivs.txt
+plink --bfile nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050 --make-bed --keep nctbIndivs.txt --out nctb_missing0.02_maf0.05_hwe0.0001_LDpruned050
+
+### grm
+gcta64 --bfile nctb_missing0.02_maf0.05_hwe0.0001_LDpruned050 --autosome --make-grm --out nctb_missing0.02_maf0.05_hwe0.0001_LDpruned050_grm
+
+### sparse grm for GWAS
+gcta64 --grm nctb_missing0.02_maf0.05_hwe0.0001_LDpruned050_grm --make-bK-sparse 0.05 --out nctb_missing0.02_maf0.05_hwe0.0001_LDpruned050_sp_grm
+
+gcta64 --grm nctb_missing0.02_maf0.05_hwe0.0001_LDpruned050_grm --pca 10 --out nctb_missing0.02_maf0.05_hwe0.0001_LDpruned050_grm_pca
+
+### make pheno file for gcta gwas
+cut -d " " -f 1,2,6 nctb_missing0.02_maf0.05_hwe0.0001_LDpruned050.fam > nctb_height.phen
+
+## other covariates
+gcta64 --bfile nctb_missing0.02_maf0.05_hwe0.0001_LDpruned050 --grm-sparse nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_sp_grm --fastGWA-mlm --pheno nctb_height.phen --qcovar qcovar.txt --covar factors.txt --thread-num 10 --out geno_assoc_withAllCovars
+
+gcta64 --bfile nctb_missing0.02_maf0.05_hwe0.0001_LDpruned050 --grm-sparse nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_sp_grm --fastGWA-mlm --pheno nctb_height.phen --qcovar nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_grm_pca.eigenvec --covar factors.txt --thread-num 10 --out geno_assoc_withFactorCovars
+```
+
+### Load in GRM and PCs
+```{r,warning=FALSE,message=FALSE}
+grmList <- read_grm(name="nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_grm")
+kinshipM <- grmList$kinship
+gctaPC_list <- read_eigenvec(file="nctb_cdb_missing0.02_maf0.05_hwe0.0001_LDpruned050_grm_pca.eigenvec")
+gctaPCs <- cbind(gctaPC_list$fam,gctaPC_list$eigenvec) %>% select(1:6)
+columns=c("population", "sampleID", "pc1", "pc2", "pc3", "pc4")
+colnames(gctaPCs) <- columns
+rownames(gctaPCs) <- gctaPCs$sampleID
+sarahPCs <- cbind(read_eigenvec(file="all-populations_missing0.02_maf0.05_hwe0.0001_LDpruned050_pc4.eigenvec")$fam,
+                  read_eigenvec(file="all-populations_missing0.02_maf0.05_hwe0.0001_LDpruned050_pc4.eigenvec")$eigenvec)
+colnames(sarahPCs) <- columns
+rownames(sarahPCs) <- sarahPCs$sampleID
+
+ggplot(gctaPCs, aes(x=pc1,y=pc2, color=population))+geom_point()+ xlab("PC1")+ ylab("PC2")+ labs(title="gctaPCs")
+ggplot(sarahPCs, aes(x=pc1,y=pc2, color=population))+geom_point()+ xlab("PC1")+ ylab("PC2")+ labs(title="sarahPCs")
+
+sarahPCs_onlyNCTBandCDB <- sarahPCs %>% filter(sampleID %in% gctaPCs$sampleID) 
+ggplot(sarahPCs_onlyNCTBandCDB, aes(x=pc1,y=pc2, color=population))+geom_point()+ xlab("PC1")+ ylab("PC2")+labs(title="sarahPCs_onlyNCTBandCDB")
+```
+## Load in raw height data and see if there's any correlation/variance that explains height based on other factors
+```{r variance partitioning,warning=FALSE,message=FALSE}
+nctbRaw <- read_table("NCTB_height.txt",col_names = T) %>% filter(complete.cases(.)) %>% select(NC_ID,age,sex,smokes,weight,height_1)
+nctbMerged <- merge(nctbRaw,sarahPCs_onlyNCTBandCDB[,c("population","sampleID")],by.x="NC_ID",by.y="sampleID",all.x=TRUE)
+
+nonGeneModel <- lmer(height_1 ~ (1|age) + (1|sex) + (1|smokes) + (1|weight),data = nctbRaw)
+summary(nonGeneModel)$varcor
+
+covarFactorTableOut <- nctbMerged[,c("population","NC_ID","sex","smokes")] %>% filter(complete.cases(.))
+write.table(covarFactorTableOut,row.names = F,col.names = F,file = "factors.txt",quote=F)
+
+gctaNCTB_PC_list <- read_eigenvec(file="nctb_missing0.02_maf0.05_hwe0.0001_LDpruned050_grm_pca.eigenvec")
+gctaPCs_NCTB <- cbind(gctaNCTB_PC_list$fam,gctaNCTB_PC_list$eigenvec) %>% select(1:6)
+columns=c("population", "sampleID", "pc1", "pc2", "pc3", "pc4")
+colnames(gctaPCs_NCTB) <- columns
+rownames(gctaPCs_NCTB) <- gctaPCs_NCTB$sampleID
+
+covarQuantTableOut  <- merge(gctaPCs_NCTB,nctbMerged[,c("NC_ID","age","weight")],by.x="sampleID",by.y="NC_ID",all=T) %>% filter(complete.cases(.)) %>% select(population,sampleID,pc1,pc2,pc3,pc4,age,weight)
+write.table(covarQuantTableOut,row.names = F,col.names = F,file = "qcovar.txt",quote=F)
+
+#covarTableOut  <- nctbMerged[,c("population","NC_ID","age","weight","sex","smokes")] %>% filter(complete.cases(.))
+#write.table(covarTableOut,row.names = F,col.names = T,file = "covar.txt")
+```
+## Bonferroni Corrected Calculated
+```{r}
+totalSNPs_afterLDprune <- 165289
+bonCorrected <- 0.05/totalSNPs_afterLDprune
+bonCorrected
+```
+
+## Load in the GCTA GWAS results
+```{r GWAS plotting0, warning=FALSE,message=FALSE}
+gwasGenetic <- read.table("geno_assoc_noPCs.fastGWA", header=T) %>% filter(!is.na(P))
+#png(file="ManhattanPlot_Heightgwas.png", width=1920, height=1080)
+manhattan(gwasGenetic, chr="CHR", bp="POS", snp="SNP", p="P",main="GWAS just SNPs",suggestiveline = bonCorrected)
+```
+
+```{r GWAS plotting, warning=FALSE,message=FALSE}
+gwasPCs <- read.table("geno_assoc.fastGWA", header=T) %>% filter(!is.na(P))
+#png(file="ManhattanPlot_Heightgwas.png", width=1920, height=1080)
+manhattan(gwasPCs, chr="CHR", bp="POS", snp="SNP", p="P",main="GWAS SNPs and PCs",suggestiveline = bonCorrected)
+```
+
+```{r GWAS plotting2, warning=FALSE,message=FALSE}
+gwasGeneticFactors <- read.table("geno_assoc_withFactorCovars.fastGWA", header=T) %>% filter(!is.na(P))
+#png(file="ManhattanPlot_Heightgwas_factors.png", width=1920, height=1080)
+manhattan(gwasGeneticFactors, chr="CHR", bp="POS", snp="SNP", p="P",main="GWAS with PCs and Sex/Smokes",suggestiveline = bonCorrected)
+```
+
+```{r GWAS plotting, warning=FALSE,message=FALSE}
+gwasGeneticAllCov <- read.table("geno_assoc_withAllCovars.fastGWA", header=T) %>% filter(!is.na(P))
+#png(file="ManhattanPlot_Heightgwas_allcov.png", width=1920, height=1080)
+manhattan(gwasGeneticAllCov, chr="CHR", bp="POS", snp="SNP", p="P",main="GWAS with PCs, Age, Weight, Smokes, Sex",suggestiveline = bonCorrected)
+```
+
