@@ -47,37 +47,51 @@ if(length(assocFiles)!= length(traits)){
   print("ERROR THE TRAIT LIST DOESN'T MATCH NUMBER OF GEMMA RUNS")
   break
 }
-for(i in 1:length(assocFiles)){
+for(i in 1:length(traits)){
   currentTrait <- traits[i]
-  currentFile <- assocFiles[i]
-  if (!grepl(currentTrait, currentFile, fixed = TRUE)) {
-    print("POSSIBLY DIFFERENT ORDER BETWEEN TRAIT LIST AND GEMMA RESULTS. TRYING AUTO FIX")
-    # Filter to only files matching your trait
-    currentFileBasedOnTrait <- assocFiles[grepl(currentTrait, assocFiles, fixed = TRUE)]
-    traitAssoc_gemma <- read.table(file=currentFileBasedOnTrait,header=T)
-  } else{
-    traitAssoc_gemma <- read.table(file=currentFile,header=T)
-  }
+  currentFileBasedOnTrait <- assocFiles[grepl(currentTrait, assocFiles, fixed = TRUE)]
+  traitAssoc_gemma <- read.table(file=currentFileBasedOnTrait,header=T)
   
-  gwas_plot <- data.frame(
+  gwasTable <- data.frame(
     SNP = traitAssoc_gemma$rs,
     CHR = as.numeric(traitAssoc_gemma$chr),
     BP  = traitAssoc_gemma$ps,
     P   = traitAssoc_gemma$p_wald
   ) %>%
-    filter(CHR %in% 1:10)
+    filter(CHR %in% 1:10) %>%
+    mutate(FDR = p.adjust(P, method = "BH"))
+  
+  bonferroniThreshold <- 0.05/nrow(gwasTable)
+  
+  fdr_threshold <- gwasTable %>%
+    filter(FDR < 0.05) 
+  if(nrow(fdr_threshold >0)){
+    fdr_threshold <- fdr_threshold %>%
+      summarise(threshold = max(P)) %>%
+      pull(threshold)
+    threshold <- c(fdr_threshold,bonferroniThreshold)
+    thresholdColor <- c("blue", "red")
+  } else{
+    threshold <- c(bonferroniThreshold)
+    thresholdColor <- c("red")
+    print("NO SNPS WITH FDR LESS THAN 0.05")
+  }
+  
+  gwas_plot <- gwasTable %>% dplyr::select(- FDR)
+  
   ### CM Plot
   CMplot(gwas_plot,
-         plot.type = c("m", "q"),       # manhattan + QQ
+         plot.type = c("m"),       # manhattan ,"c" + QQ
          #threshold = c(1e-5, 1e-6),
          #threshold.col = c("blue", "red"),
-         threshold=0.05/10255162,
-         threshold.col="red",
+         #threshold=0.05/10255162,
+         threshold=threshold,
+         threshold.col=thresholdColor,
          amplify = TRUE,
-         file = "pdf",
+         file = "png",
          main=currentTrait,
          dpi = 300,
          file.output = TRUE,
-         file.name=paste0("outputGemma/",currentTrait,"_Manhattan.pdf"))
+         file.name=currentTrait)
 }
 

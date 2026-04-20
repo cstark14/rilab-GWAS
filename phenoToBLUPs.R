@@ -6,14 +6,14 @@ options(stringsAsFactors=FALSE)
 options(scipen=999)
 "%notin%" <- Negate("%in%")
 
-DH_Phenos <- read_excel("~/Downloads/DH_phenotype_JLcombined35_cleanup_output_top10pct_large-plots.xlsx", 
+DH_Phenos <- read_excel("~/Desktop/JackGWAS/DH_phenotype_JLcombined35_cleanup_output_top10pct_large-plots.xlsx", 
                         na = "NA", skip = 1) %>%
   group_by(MaternalParent) %>%
   mutate(Rep=row_number()) %>%
   ungroup() %>%
   rename(`KW100` = `100-KW`) %>%
   mutate(BR=ifelse(BR=='N',0,1)) %>%
-  mutate(ME=ifelse(BR=='N',0,1)) %>%
+  mutate(ME=ifelse(ME=='N',0,1)) %>%
   dplyr::select(-Source)
 
 ### lme4 version 
