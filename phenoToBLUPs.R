@@ -26,31 +26,31 @@ continuous_traits <- traits[traits %notin% binary_traits]
 # B73  | Env1|  1  | 12.4  |    145.2    |   18.3
 
 BLUPFunctions <- function(){
-blup_list <- lapply(traits, function(trait) {
-  print(trait)
-  #formula <- as.formula(paste0(trait, " ~ (1|MaternalParent)"))
-  formula <- paste0(trait, " ~ (1|MaternalParent)")
+  blup_list <- lapply(traits, function(trait) {
+    print(trait)
+    #formula <- as.formula(paste0(trait, " ~ (1|MaternalParent)"))
+    formula <- paste0(trait, " ~ (1|MaternalParent)")
+    
+    print(formula)
+    model <- lmer(formula, data = DH_Phenos, REML = TRUE)
+    
+    blups <- ranef(model)$MaternalParent
+    colnames(blups) <- trait
+    blups
+  })
   
-  print(formula)
-  model <- lmer(formula, data = DH_Phenos, REML = TRUE)
+  # Combine
+  #blup_df <- do.call(cbind, blup_list)
+  blup_df <- Reduce(function(x, y) merge(x, y, by = "row.names", all = TRUE) %>%
+                      column_to_rownames("Row.names"),
+                    blup_list)
   
-  blups <- ranef(model)$MaternalParent
-  colnames(blups) <- trait
-  blups
-})
-
-# Combine
-#blup_df <- do.call(cbind, blup_list)
-blup_df <- Reduce(function(x, y) merge(x, y, by = "row.names", all = TRUE) %>%
-                    column_to_rownames("Row.names"),
-                  blup_list)
-
-# Format for PLINK2
-pheno_df <- data.frame(
-  FID = unique(DH_Phenos$`Sum25Family #`),
-  IID = rownames(blup_df),
-  blup_df
-)
+  # Format for PLINK2
+  pheno_df <- data.frame(
+    FID = unique(DH_Phenos$`Sum25Family #`),
+    IID = rownames(blup_df),
+    blup_df
+  )
 }
 
 BLUEfunctions <- function(){
